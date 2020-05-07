@@ -24,9 +24,6 @@ void WSServer::packetCallback(void* userData, bool isVideoStream, unsigned char*
 			//writeFile(buff,size);
 		}
 
-
-
-
 	}
 
 
