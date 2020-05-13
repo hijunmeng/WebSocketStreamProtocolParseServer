@@ -12,6 +12,7 @@ extern "C" {
 }
 #include <thread>
 #include <functional>
+#include <mutex>
 
 #define TAKE_SLEEP_TIME_MS 10   //读数据时的间隔时间
 #define OPEN_TIMEOUT_S 6 //打开超时时间 单位秒
@@ -80,6 +81,7 @@ public:
 	int close();
 
 private:
+	std::mutex m_mutex;
 
 	int takeSleepTimeMs;
 
@@ -92,8 +94,8 @@ private:
 
 
 	volatile bool running;//取流线程是否在跑
-	bool isOpen;//是否打开
-	bool hasAudio;
+	volatile bool isOpen;//是否打开
+	volatile bool hasAudio;
 
 	AVCodecParameters* pVideoCodecParameters;
 	AVCodecParameters* pAudioCodecParameters;

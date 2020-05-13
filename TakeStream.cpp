@@ -59,19 +59,19 @@ TakeStream::TakeStream()
 TakeStream::~TakeStream()
 {
 	close();
+	std::lock_guard<std::mutex> lock(m_mutex);//这把锁主要是为了阻塞直到取流线程退出
 
 	if (packet != NULL) {
 		av_packet_free(&packet);
-		packet = NULL;
+		//packet = NULL;
 		log(AV_LOG_INFO, "packet released.");
 	}
 	if (pFormatContext != NULL) {
 		avformat_close_input(&pFormatContext);//内部会调用avformat_free_context
 		pFormatContext = NULL;
-
 		log(AV_LOG_INFO, "format context released.");
 	}
-
+	log(AV_LOG_INFO, "TakeStream released.");
 
 
 }
@@ -140,6 +140,10 @@ int TakeStream::open(char* url)
 	int ret = 0;
 
 	log(AV_LOG_INFO, "avformat_alloc_context.");
+	if (pFormatContext != NULL) {
+		avformat_close_input(&pFormatContext);//内部会调用avformat_free_context
+		pFormatContext = NULL;
+	}
 	pFormatContext = avformat_alloc_context();
 	//必须设置超时，否则会导致长时间不返回
 	Runner input_runner = { 0 };
@@ -233,12 +237,6 @@ int TakeStream::open(char* url)
 
 int TakeStream::close()
 {
-	if (!running) {//如果已经在取流线程中，则不可直接avformat_close_input，否则会出现异常
-		if (pFormatContext != NULL) {
-			avformat_close_input(&pFormatContext);
-			pFormatContext = NULL;
-		}
-	}
 	running = false;
 	isOpen = false;
 	hasAudio = false;
@@ -278,10 +276,12 @@ static void writeFile(unsigned char* buff, int size) {
 }
 //需要放置在线程中
 int TakeStream::takeLoop() {
+	std::lock_guard<std::mutex> lock(m_mutex);//这把锁主要是为了保证析构前当前线程已经退出
 	log(AV_LOG_INFO, "enter take Stream Loop");
 	av_init_packet(packet);
 	packet->data = NULL;
 	packet->size = 0;
+
 	while (running) {
 		av_packet_unref(packet);//必须增加这一句释放之前占用的内存
 		int ret = av_read_frame(pFormatContext, packet);
@@ -316,6 +316,10 @@ int TakeStream::takeLoop() {
 	}
 	log(AV_LOG_INFO, "take stream Loop has exit");
 	//取流线程退出，关闭输入流
+	if (pFormatContext != NULL) {
+		avformat_close_input(&pFormatContext);
+		pFormatContext = NULL;
+	}
 	close();
 	return 0;
 }

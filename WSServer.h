@@ -1,7 +1,7 @@
 #ifndef WELLDONE_WS_SERVER_H
 #define WELLDONE_WS_SERVER_H
 
-//此服务为websocket服务，提供取流功能，协议采用json格式，流通过二进制传输，代码仅作为演示和参考
+//此服务为websocket服务，提供取流功能，协议采用json格式，流通过二进制传输，代码仅作为演示和参考（未进行并发测试）
 //todo的注释是在实际生产环境必须要解决的问题，这里暂未实现
 //todo:实际生产环境为了应对并发问题，需要自己实现线程池
 //todo:提供详细的错误码及信息
@@ -15,6 +15,7 @@
 
 #include <websocketpp/config/asio_no_tls.hpp>
 #include <websocketpp/server.hpp>
+//#include <boost/shared_ptr.hpp>
 
 #include <functional>
 #include <map>
@@ -40,7 +41,8 @@ typedef std::function<void()> MsgHandlerLoop;
 
 typedef struct {
 	websocketpp::connection_hdl hdl;//连接句柄
-	TakeStream* takeStream;//取流器
+	//TakeStream* takeStream;//取流器
+	std::shared_ptr<TakeStream> spTakeStream;
 } ConnectObj;
 
 typedef struct {
@@ -62,6 +64,7 @@ public:
 
 private:
 	std::mutex m_mutex;
+	std::shared_ptr<TakeStream> spTakeStream;
 	server m_endpoint;//webscoketpp服务endpoint
 
 	std::map<int, ConnectObj*> connects;//管理所有连接,可能需要找一个线程安全的

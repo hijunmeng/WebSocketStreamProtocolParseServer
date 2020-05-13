@@ -24,6 +24,9 @@ void WSServer::packetCallback(void* userData, bool isVideoStream, unsigned char*
 			//writeFile(buff,size);
 		}
 
+
+
+
 	}
 
 
@@ -75,8 +78,7 @@ WSServer::~WSServer()
 	{
 		ConnectObj* obj = l_it->second;
 		//释放
-		delete obj->takeStream;
-		obj->takeStream = nullptr;
+		obj->spTakeStream.reset();
 		delete obj;
 		obj = nullptr;
 	}
@@ -161,10 +163,11 @@ void WSServer::openHandler(websocketpp::connection_hdl hdl) {
 	std::map<int, ConnectObj*> ::iterator l_it;
 	l_it = connects.find((long)hdl.lock().get());
 	if (l_it == connects.end()) {
-		TakeStream* ts = new TakeStream();//自己新建需要自己释放
+
 		ConnectObj* obj = new ConnectObj();
 		obj->hdl = hdl;
-		obj->takeStream = ts;
+		obj->spTakeStream = std::shared_ptr<TakeStream>(new TakeStream());
+		std::cout << "openHandler: now the use count  is : " << obj->spTakeStream.use_count() << std::endl;
 		//新的连接则插入
 		connects.insert(pair<int, ConnectObj*>((long)hdl.lock().get(), obj));
 	}
@@ -183,10 +186,9 @@ void WSServer::closeHandler(websocketpp::connection_hdl hdl) {
 	if (l_it != connects.end()) {
 		ConnectObj* obj = l_it->second;
 		connects.erase(l_it);
-
-		//释放
-		delete obj->takeStream;
-		obj->takeStream = nullptr;
+		//注意此处不可直接delete释放对象
+		obj->spTakeStream.reset();//引用计数减一
+		std::cout << "closeHandler: now the use count  is : " << obj->spTakeStream.use_count() << std::endl;
 		delete obj;
 		obj = nullptr;
 	}
@@ -201,6 +203,7 @@ void WSServer::msgHandlerLoop() {
 			Msg* msg = msgQueue.front();
 			msgQueue.pop();//删除队首
 			handleTextMessage(msg->hdl, msg->msg);
+
 			delete msg;
 		}
 		else {
@@ -243,26 +246,20 @@ void WSServer::run() {
 }
 
 void WSServer::handleTextMessage(websocketpp::connection_hdl hdl, server::message_ptr msg) {
-
+	std::lock_guard<std::mutex> lock(m_mutex);//防止在执行过程中ConnectObj被释放了
 	ConnectObj* obj = nullptr;
-	{
-		std::lock_guard<std::mutex> lock(m_mutex);
-		std::map<int, ConnectObj*> ::iterator l_it;
-		l_it = connects.find((long)hdl.lock().get());
-		if (l_it != connects.end()) {
-			obj = l_it->second;
-		}
-		else {//实际上这一步只是为了保险起见，正常是不会进入这个条件的
-			TakeStream* ts = new TakeStream();//自己新建需要自己释放
-			obj = new ConnectObj();
-			obj->hdl = hdl;
-			obj->takeStream = ts;
-			//新的连接则插入
-			connects.insert(pair<int, ConnectObj*>((long)hdl.lock().get(), obj));
 
-		}
+	std::map<int, ConnectObj*> ::iterator l_it;
+	l_it = connects.find((long)hdl.lock().get());
+	if (l_it != connects.end()) {
+		obj = l_it->second;
 	}
-
+	else {
+		return;
+	}
+	std::shared_ptr<TakeStream> spTakeStream = obj->spTakeStream;
+	TakeStream* takeStream = spTakeStream.get();
+	std::cout << "handleTextMessage before: now the use count  is : " << spTakeStream.use_count() << std::endl;
 
 	//{"request":"open_url",content:""}
 	cJSON* response = cJSON_CreateObject();//响应json
@@ -295,15 +292,15 @@ void WSServer::handleTextMessage(websocketpp::connection_hdl hdl, server::messag
 			Userdata* userdata = new Userdata();
 			userdata->hdl = hdl;
 			PacketCallbackFunction fun = std::bind(&WSServer::packetCallback, this, std::placeholders::_1, std::placeholders::_2, std::placeholders::_3, std::placeholders::_4, std::placeholders::_5, std::placeholders::_6, std::placeholders::_7);
-			obj->takeStream->setPacketCallback(fun, userdata);
+			takeStream->setPacketCallback(fun, userdata);
 
 			//打开url
-			code = obj->takeStream->open(url);
+			code = takeStream->open(url);
 			cJSON_AddNumberToObject(response, "code", code);
 			if (code == 0) {
 				cJSON_AddStringToObject(response, "msg", "success");
 				VideoInfo info;
-				obj->takeStream->getVideoInfo(info);
+				takeStream->getVideoInfo(info);
 				cJSON_AddNumberToObject(response, "codeID", info.codeID);
 				cJSON_AddNumberToObject(response, "width", info.width);
 				cJSON_AddNumberToObject(response, "height", info.height);
@@ -317,7 +314,7 @@ void WSServer::handleTextMessage(websocketpp::connection_hdl hdl, server::messag
 
 		}
 		else if (strcmp("close_url", req->valuestring) == 0) {
-			code = obj->takeStream->close();
+			code = takeStream->close();
 			cJSON_AddNumberToObject(response, "code", code);
 			cJSON_AddStringToObject(response, "msg", "success");
 			char* out = cJSON_Print(response);
@@ -330,10 +327,10 @@ void WSServer::handleTextMessage(websocketpp::connection_hdl hdl, server::messag
 
 			cJSON* sleepTimeMs = cJSON_GetObjectItem(requestRoot, "sleepTimeMs");
 			if (sleepTimeMs != nullptr) {
-				code = obj->takeStream->startTakeStreamThread(sleepTimeMs->valueint);
+				code = takeStream->startTakeStreamThread(sleepTimeMs->valueint);
 			}
 			else {
-				code = obj->takeStream->startTakeStreamThread();
+				code = takeStream->startTakeStreamThread();
 			}
 
 			cJSON_AddNumberToObject(response, "code", code);
@@ -349,7 +346,7 @@ void WSServer::handleTextMessage(websocketpp::connection_hdl hdl, server::messag
 			free(out);
 		}
 		else if (strcmp("read_one_frame", req->valuestring) == 0) {
-			code = obj->takeStream->readOneFrame();
+			code = takeStream->readOneFrame();
 			cJSON_AddNumberToObject(response, "code", code);
 			if (code == 0) {
 				cJSON_AddStringToObject(response, "msg", "success");
@@ -376,9 +373,8 @@ void WSServer::handleTextMessage(websocketpp::connection_hdl hdl, server::messag
 	cJSON_Delete(response);
 	cJSON_Delete(requestRoot);
 
-
+	//在此函数退出时引用计数会自动减一，不用调用reset
+	//spTakeStream.reset();
+	//std::cout << "handleTextMessage after reset: now the use count  is : " << obj->spTakeStream.use_count() << std::endl;
 
 }
-
-
-
